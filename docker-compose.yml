@@ -1,0 +1,130 @@
+services:
+  webserver:
+    network_mode: host
+    image: nginx:latest
+    container_name: nginx
+    environment:
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
+      DOMAIN: ${DOMAIN}
+    command: nginx
+    restart: always
+    volumes:
+      - ./nginx.conf:/etc/nginx/templates/nginx.conf.template
+      - ./nginx_error_pages:/usr/share/nginx/html/
+      - ./certs:/etc/nginx/sites-available
+
+  grafana:
+    network_mode: host
+    image: grafana/grafana
+    container_name: grafana
+    restart: always
+    volumes:
+      - gr_data:/var/lib/grafana
+
+  prometheus:
+    network_mode: host
+    image: prom/prometheus
+    container_name: prometheus
+    restart: always
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - pr_data:/prometheus
+
+  nginx-prometheus-exporter:
+    network_mode: host
+    image: nginx/nginx-prometheus-exporter
+    container_name: nginx-prometheus-exporter
+    restart: always
+    command:
+      - '--nginx.scrape-uri=http://127.0.0.1:80/metrics'
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  node-prometheus-exporter:
+    network_mode: host
+    image: prom/node-exporter
+    container_name: node-prometheus-exporter
+    restart: always
+    depends_on:
+      prometheus:
+        condition: service_started
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+
+  pgsql_db:
+    network_mode: host
+    image: postgres:latest
+    container_name: pgsql_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    restart: always
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${POSTGRES_USER}@${DOMAIN}
+      PGADMIN_DEFAULT_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: always
+    ports:
+      - "3002:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  redis:
+    network_mode: host
+    image: redis:latest
+    container_name: redis
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_USER=${REDIS_USER}
+      - REDIS_USER_PASSWORD=${REDIS_USER_PASSWORD}
+    volumes:
+      - redis_data:/data
+    restart: always
+    command: >
+      sh -c '
+        mkdir -p /usr/local/etc/redis &&
+        echo "bind 0.0.0.0" > /usr/local/etc/redis/redis.conf &&
+        echo "requirepass $REDIS_PASSWORD" >> /usr/local/etc/redis/redis.conf &&
+        echo "appendonly yes" >> /usr/local/etc/redis/redis.conf &&
+        echo "appendfsync everysec" >> /usr/local/etc/redis/redis.conf &&
+        echo "user default on nopass ~* +@all" > /usr/local/etc/redis/users.acl &&
+        echo "user $REDIS_USER on >$REDIS_USER_PASSWORD ~* +@all" >> /usr/local/etc/redis/users.acl &&
+        redis-server /usr/local/etc/redis/redis.conf --aclfile /usr/local/etc/redis/users.acl
+      '
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "$REDIS_PASSWORD", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  redisinsight:
+      image: redis/redisinsight:latest
+      container_name: redisinsight
+      ports:
+        - "6378:5540"
+      volumes:
+        - redisinsight_data:/data
+
+volumes:
+  gr_data:
+  pr_data:
+  db_data:
+  pgadmin_data:
+  redis_data:
+  redisinsight_data:
